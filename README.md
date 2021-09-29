@@ -18,5 +18,5 @@ The GeoPackage including encrypted tiles can be requested via the WMS 1.1.0 inte
 
 The GeoPackage including encrypted features can be requested via WFS 2.0.0 interface. One GeoPackage table is created per feature type requested with the `typeName` parameter. Each feature type is encrypted with a different key. The link to the key's metadata is done via a foreign key into the `gpkg_ext_keys` table.
 
-* [Installing the GeoPackage Encryption plugin](/INSTALL.MD)
-* [Decrypting the Encrypted GeoPackage Format](/DECRYPTING.MD)
+* [Installing the GeoPackage Encryption plugin](/INSTALL.md)
+* [Decrypting the Encrypted GeoPackage Format](/DECRYPTING.md)
