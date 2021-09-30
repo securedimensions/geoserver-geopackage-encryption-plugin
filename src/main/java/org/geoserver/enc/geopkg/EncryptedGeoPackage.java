@@ -23,7 +23,7 @@ import org.sqlite.SQLiteConfig;
 public class EncryptedGeoPackage extends GeoPackage {
 
     /** package file extension */
-    public static final String EXTENSION = "geopackage+encrypted";
+    public static final String EXTENSION = "gpkg";
 
     /** format mime type */
     public static final String MIME_TYPE = "application/geopackage+sqlite3;profile=encrypted";
