@@ -12,6 +12,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -56,6 +57,20 @@ public class KmsProxy {
     	
    }
 
+    public String get(String kid, String accessToken) throws IOException
+    {
+    	String uri = url.toString();
+    	URL getUrl = new URL(uri + "/" + kid);
+    	HttpsURLConnection con = (HttpsURLConnection) getUrl.openConnection();
+        con.setRequestMethod("GET");
+
+        con.setRequestProperty("Authorization", "Bearer " + accessToken);
+        con.setDoOutput(false);
+        con.setDoInput(true);
+
+        return IOUtils.toString(con.getInputStream(), StandardCharsets.UTF_8);
+    }
+    
     public String put(
             String k,
             String alg,

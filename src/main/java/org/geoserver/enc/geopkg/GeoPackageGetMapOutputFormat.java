@@ -79,7 +79,9 @@ import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.OctetSequenceKey;
 import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.SecretJWK;
 import com.nimbusds.jose.util.Base64URL;
+import com.nimbusds.jose.util.JSONObjectUtils;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -92,6 +94,7 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 
 	static Logger LOGGER = Logging.getLogger("org.geoserver.geopkg-encrypted");
 
+	private KeyGenerator keyGen = null;
 	private SecretKey dek = null;
 	private SignedJWT dekJWT = null;
 	private JWSSigner signer = null;
@@ -150,7 +153,6 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 			KeyGenerator keyGen;
 			keyGen = KeyGenerator.getInstance("AES");
 			keyGen.init(keySize);
-			dek = keyGen.generateKey();
 
 			InputStream inputStream = this.getClass().getClassLoader().getResourceAsStream(pemFileName);
 			String pem = IOUtils.toString(inputStream, StandardCharsets.UTF_8);
@@ -326,7 +328,7 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 	@Override
 	public WebMap produceMap(WMSMapContent map) throws ServiceException, IOException {
 
-		try {
+
 			Request request = Dispatcher.REQUEST.get();		
 			Map <String, Object> kvp = request.getKvp();
 			
@@ -373,6 +375,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 				throw new ServiceException("Required parameter 'key_challenge_method' missing");
 			}
 
+			String dekId = (String) kvp.get("dek_kid");
+			
 			// Validate the access token
 			if (!tokenCache.isActive(accessToken)) {
 				LOGGER.severe("Access Token invalid");
@@ -380,39 +384,83 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 				throw serviceException;
 			}
 
-			// Register DEK with KMS
+			String kid = null;
 			KmsProxy kms = new KmsProxy();
 			
-			EncryptionMethod encMethod = EncryptionMethod.parse(enc);
-			OctetSequenceKey jwk = new OctetSequenceKey.Builder(dek).build();
-			Base64URL k = jwk.getKeyValue();
+			try {
+				if (dekId != null) {
+					// the user specified a kid for an encryption key that we need to use
+					kid = dekId;
 
-			long now = Instant.now().getEpochSecond();
-			long expires = now + 300 /* 5min*/;
-			String kid = kms.put(k.toString(), encMethod.getName(), keyChallenge, keyChallengeMethod, tokenCache.getAud(accessToken),
-					tokenCache.getClientId(), tokenCache.getSub(accessToken), expires, accessToken);
+					String dekString = kms.get(kid, accessToken);
 
-			if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("kid from KMS: " + kid);
+					Map<String, Object> dekJSON = JSONObjectUtils.parse(dekString);
+					SecretJWK jwk = OctetSequenceKey.parse(dekJSON);
 
-			// Create a JWS from the DEK to be stored in the DCS GeoPackage
-			List<String> audience = new ArrayList<String>();
-			audience.add(tokenCache.getAud(accessToken));
-			JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder().subject(tokenCache.getSub(accessToken)).audience(audience)
-					.issuer(issuer).expirationTime(new Date(expires)).claim("kid", kid)
-					.claim("alg", encMethod.getName())
-					.claim("kurl", dekUrl + kid).claim("iat", now).build();
-			dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
+					dek = jwk.toSecretKey();
+					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
+					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
+							.subject((String) dekJSON.get("sub"))
+							.audience((String) dekJSON.get("aud"))
+							.issuer((String) dekJSON.get("issuer"))
+							.expirationTime(new Date((long) dekJSON.get("expires") * 1000 /*ms*/))
+							.claim("kid", kid)
+							.claim("alg", (String) dekJSON.get("alg"))
+							.claim("kurl", dekUrl + kid)
+							.claim("iat", (long) dekJSON.get("issued_at"))
+							.build();
+					dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
 
-			// Compute the RSA signature
-			dekJWT.sign(signer);
-			if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("dek JWT: " + dekJWT.serialize());
+					// Compute the RSA signature
+					dekJWT.sign(signer);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("dek JWT: " + dekJWT.serialize());
 
-		} catch (Exception ex) {
-			LOGGER.severe(ex.getMessage());
-			ServiceException serviceException = new ServiceException("Error: " + ex.getMessage());
-			serviceException.initCause(ex);
-			throw serviceException;
-		}
+				} else {
+
+					// Generate a new key
+					dek = keyGen.generateKey();
+
+					EncryptionMethod encMethod = EncryptionMethod.parse(enc);
+					OctetSequenceKey osk = new OctetSequenceKey.Builder(dek).build();
+					Base64URL k = osk.getKeyValue();
+
+					// Register DEK with KMS
+					long now = Instant.now().getEpochSecond();
+					long expires = now + 300 /* 5min */;
+
+					kid = kms.put(k.toString(), encMethod.getName(), keyChallenge, keyChallengeMethod,
+							tokenCache.getAud(accessToken), tokenCache.getClientId(), tokenCache.getSub(accessToken),
+							expires, accessToken);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("kid from KMS: " + kid);
+
+					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
+					List<String> audience = new ArrayList<String>();
+					audience.add(tokenCache.getAud(accessToken));
+					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
+							.subject(tokenCache.getSub(accessToken))
+							.audience(audience)
+							.issuer(issuer).expirationTime(new Date(expires))
+							.claim("kid", kid)
+							.claim("alg", encMethod.getName())
+							.claim("kurl", dekUrl + kid)
+							.claim("iat", now)
+							.build();
+					dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
+
+					// Compute the RSA signature
+					dekJWT.sign(signer);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("dek JWT: " + dekJWT.serialize());
+				}
+
+			} catch (Exception e1) {
+				LOGGER.severe(e1.getMessage());
+				ServiceException serviceException = new ServiceException("Error: " + e1.getMessage());
+				serviceException.initCause(e1);
+				throw serviceException;
+			}
 
 		map.getRequest().getFormatOptions().put("flipy", "true");
 		

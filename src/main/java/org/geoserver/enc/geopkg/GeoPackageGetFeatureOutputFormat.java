@@ -88,7 +88,9 @@ import com.nimbusds.jose.crypto.RSASSASigner;
 import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.OctetSequenceKey;
 import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.SecretJWK;
 import com.nimbusds.jose.util.Base64URL;
+import com.nimbusds.jose.util.JSONObjectUtils;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 
@@ -104,12 +106,13 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 	public static final String PROPERTY_INDEXED = "geopackage.wfs.indexed";
 
 	private KeyGenerator keyGen = null;
+	private SecretKey dek = null;
 	private SignedJWT dekJWT = null;
 	private JWSSigner signer = null;
 	private JWSHeader jwsHeader = null;
 	private Cipher cipher = null;
 	private TokenCache tokenCache = null;
-	
+
 	private String issuer = null;
 	private String jwkUrl = null;
 	private String pemFileName = null;
@@ -121,51 +124,51 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		super(gs, MIME_TYPE);
 
 		try {
-			InputStream stream = getClass().getClassLoader().getResourceAsStream(
-		            "META-INF/GeoPackageGetFeatureOutputFormat.properties");
-			
+			InputStream stream = getClass().getClassLoader()
+					.getResourceAsStream("META-INF/GeoPackageGetFeatureOutputFormat.properties");
+
 			if (stream == null)
-		        throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties files not found");
-		   
-            Properties properties = new Properties();
-            properties.load(stream);
-            stream.close();
-		            
-            issuer = (String)properties.get("issuer");
-            if (issuer == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'issuer'");
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties files not found");
 
-            jwkUrl = (String)properties.get("jwk_url");
-            if (jwkUrl == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'jwk_url'");
+			Properties properties = new Properties();
+			properties.load(stream);
+			stream.close();
 
-            pemFileName = (String)properties.get("pem_file_name");
-            if (pemFileName == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'pem_file_name'");
-			
-            pemKid = (String)properties.get("pem_kid");
-            if (pemKid == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'pem_kid'");
-			
-            dekUrl = (String)properties.get("dek_url");
-            if (dekUrl == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'dek_url'");
-			
-            enc = (String)properties.get("enc");
-            if (enc == null)
-            	throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'enc'");
+			issuer = (String) properties.get("issuer");
+			if (issuer == null)
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'issuer'");
 
-    		// generate a symmetric key
-    		int keySize = 128;
+			jwkUrl = (String) properties.get("jwk_url");
+			if (jwkUrl == null)
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'jwk_url'");
 
-    		keyGen = KeyGenerator.getInstance("AES");
+			pemFileName = (String) properties.get("pem_file_name");
+			if (pemFileName == null)
+				throw new ServiceException(
+						"GeoPackageGetFeatureOutputFormat.properties missing parameter 'pem_file_name'");
+
+			pemKid = (String) properties.get("pem_kid");
+			if (pemKid == null)
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'pem_kid'");
+
+			dekUrl = (String) properties.get("dek_url");
+			if (dekUrl == null)
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'dek_url'");
+
+			enc = (String) properties.get("enc");
+			if (enc == null)
+				throw new ServiceException("GeoPackageGetFeatureOutputFormat.properties missing parameter 'enc'");
+
+			// generate a symmetric key
+			int keySize = 128;
+
+			keyGen = KeyGenerator.getInstance("AES");
 			keyGen.init(keySize);
-			
+
 			InputStream inputStream = this.getClass().getClassLoader().getResourceAsStream(pemFileName);
 			String pem = IOUtils.toString(inputStream, StandardCharsets.UTF_8);
 			RSAKey senderJWK = JWK.parseFromPEMEncodedObjects(pem).toRSAKey();
-			jwsHeader = new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(pemKid)
-					.jwkURL(new URI(jwkUrl)).build();
+			jwsHeader = new JWSHeader.Builder(JWSAlgorithm.RS256).keyID(pemKid).jwkURL(new URI(jwkUrl)).build();
 
 			signer = new RSASSASigner(senderJWK);
 
@@ -222,67 +225,50 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 	@Override
 	protected void write(FeatureCollectionResponse featureCollection, OutputStream output, Operation operation)
 			throws IOException, ServiceException {
-		
-		Request request = Dispatcher.REQUEST.get();		
-		Map <String, Object> kvp = request.getKvp();
-		
-		String accessToken = (String)kvp.get("access_token");
+
+		Request request = Dispatcher.REQUEST.get();
+		Map<String, Object> kvp = request.getKvp();
+
+		String accessToken = (String) kvp.get("access_token");
 		if (accessToken == null) {
 			LOGGER.info("No 'access_token' in query. Looking in HTTP header...");
 			String authorization = request.getHttpRequest().getHeader("Authorization");
-			if (authorization == null)
-			{
+			if (authorization == null) {
 				LOGGER.severe("No 'access_token' in query and no Authorization header");
 				throw new ServiceException("Must submit Bearer Access Token RFC 6750 compliant.");
-			}
-			else
-			{
-				String []token = authorization.split(" ");
-				if (token.length != 2)
-				{
+			} else {
+				String[] token = authorization.split(" ");
+				if (token.length != 2) {
 					LOGGER.severe("Authorization header could not be processed");
 					throw new ServiceException("Authorization header could not be processed.");
-				}
-				else
-				{
-					if (!token[0].trim().equalsIgnoreCase("Bearer"))
-					{
+				} else {
+					if (!token[0].trim().equalsIgnoreCase("Bearer")) {
 						LOGGER.severe("Authorization header must be of type Bearer");
 						throw new ServiceException("Authorization header must be of type Bearer.");
-					}
-					else
-					{
+					} else {
 						accessToken = token[1].trim();
 					}
 				}
 			}
 		}
 
-		String keyChallenge = (String)kvp.get("key_challenge");
+		String keyChallenge = (String) kvp.get("key_challenge");
 		if (keyChallenge == null) {
 			LOGGER.severe("'key_challenge' missing");
 			throw new ServiceException("Required parameter 'key_challenge' missing");
 		}
-		String keyChallengeMethod = (String)kvp.get("key_challenge_method");
+		String keyChallengeMethod = (String) kvp.get("key_challenge_method");
 		if (keyChallengeMethod == null) {
 			LOGGER.severe("'key_challenge_method' missing");
 			throw new ServiceException("Required parameter 'key_challenge_method' missing");
 		}
 
+		String dekId = (String) kvp.get("dek_kid");
+
+		// Validate the access token
 		if (!tokenCache.isActive(accessToken)) {
 			LOGGER.severe("Access Token invalid");
 			ServiceException serviceException = new ServiceException("Error: Access Token invalid");
-			throw serviceException;
-		}
-		try {
-			// Validate the access token
-			
-
-
-		} catch (Exception e) {
-			LOGGER.severe(e.getMessage());
-			ServiceException serviceException = new ServiceException("Error: " + e.getMessage());
-			serviceException.initCause(e);
 			throw serviceException;
 		}
 
@@ -294,43 +280,83 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		int dekIdx = 1;
 		for (FeatureCollection collection : featureCollection.getFeatures()) {
 
-			// Generate a new key
-			SecretKey dek = keyGen.generateKey();
-
-			EncryptionMethod encMethod = EncryptionMethod.parse(enc);
-			OctetSequenceKey jwk = new OctetSequenceKey.Builder(dek).build();
-			Base64URL k = jwk.getKeyValue();
-
-			// Register DEK with KMS
+			String kid = null;
 			KmsProxy kms = new KmsProxy();
-			long now = Instant.now().getEpochSecond();
-			long expires = now + 300 /* 5min*/;
-			String kid;
+			
 			try {
-				kid = kms.put(k.toString(), encMethod.getName(), keyChallenge, keyChallengeMethod, tokenCache.getAud(accessToken),
-						tokenCache.getClientId(), tokenCache.getSub(accessToken), expires, accessToken);
-				if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("kid from KMS: " + kid);
+				if (dekId != null) {
+					// the user specified a kid for an encryption key that we need to use
+					kid = dekId;
 
-				// Create a JWS from the DEK to be stored in the DCS GeoPackage
-				List<String> audience = new ArrayList<String>();
-				audience.add(tokenCache.getAud(accessToken));
-				JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder().subject(tokenCache.getSub(accessToken)).audience(audience)
-						.issuer(issuer).expirationTime(new Date(expires)).claim("kid", kid)
-						.claim("alg", encMethod.getName())
-						.claim("kurl", dekUrl + kid).claim("iat", now).build();
-				dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
+					String dekString = kms.get(kid, accessToken);
 
-				// Compute the RSA signature
-				dekJWT.sign(signer);
-				if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("dek JWT: " + dekJWT.serialize());
+					Map<String, Object> dekJSON = JSONObjectUtils.parse(dekString);
+					SecretJWK jwk = OctetSequenceKey.parse(dekJSON);
+
+					dek = jwk.toSecretKey();
+					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
+					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
+							.subject((String) dekJSON.get("sub"))
+							.audience((String) dekJSON.get("aud"))
+							.issuer((String) dekJSON.get("issuer"))
+							.expirationTime(new Date((long) dekJSON.get("expires") * 1000 /*ms*/))
+							.claim("kid", kid)
+							.claim("alg", (String) dekJSON.get("alg"))
+							.claim("kurl", dekUrl + kid)
+							.claim("iat", (long) dekJSON.get("issued_at"))
+							.build();
+					dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
+
+					// Compute the RSA signature
+					dekJWT.sign(signer);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("dek JWT: " + dekJWT.serialize());
+
+				} else {
+
+					// Generate a new key
+					dek = keyGen.generateKey();
+
+					EncryptionMethod encMethod = EncryptionMethod.parse(enc);
+					OctetSequenceKey osk = new OctetSequenceKey.Builder(dek).build();
+					Base64URL k = osk.getKeyValue();
+
+					// Register DEK with KMS
+					long now = Instant.now().getEpochSecond();
+					long expires = now + 300 /* 5min */;
+
+					kid = kms.put(k.toString(), encMethod.getName(), keyChallenge, keyChallengeMethod,
+							tokenCache.getAud(accessToken), tokenCache.getClientId(), tokenCache.getSub(accessToken),
+							expires, accessToken);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("kid from KMS: " + kid);
+
+					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
+					List<String> audience = new ArrayList<String>();
+					audience.add(tokenCache.getAud(accessToken));
+					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
+							.subject(tokenCache.getSub(accessToken))
+							.audience(audience)
+							.issuer(issuer).expirationTime(new Date(expires))
+							.claim("kid", kid)
+							.claim("alg", encMethod.getName())
+							.claim("kurl", dekUrl + kid)
+							.claim("iat", now)
+							.build();
+					dekJWT = new SignedJWT(jwsHeader, dekClaimsSet);
+
+					// Compute the RSA signature
+					dekJWT.sign(signer);
+					if (LOGGER.getLevel() == Level.FINE)
+						LOGGER.fine("dek JWT: " + dekJWT.serialize());
+				}
+
 			} catch (Exception e1) {
 				LOGGER.severe(e1.getMessage());
 				ServiceException serviceException = new ServiceException("Error: " + e1.getMessage());
 				serviceException.initCause(e1);
 				throw serviceException;
 			}
-
-
 			FeatureEntry e = new FeatureEntry();
 
 			if (!(collection instanceof SimpleFeatureCollection)) {
@@ -447,14 +473,15 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			ps.execute();
 
 			ps = prepare(c, format("INSERT INTO %s VALUES (?, ?, ?, ?, ?);", "gpkg_extensions")).set(fe.getTableName())
-					.set((String) null).set("sd_encrypted_features").set("https://docs.ogc.org/per/21-064.html#GPKGExtension").set("read-write")
-					.log(Level.FINE).statement();
+					.set((String) null).set("sd_encrypted_features")
+					.set("https://docs.ogc.org/per/21-064.html#GPKGExtension").set("read-write").log(Level.FINE)
+					.statement();
 			ps.execute();
 
 			ps = prepare(c, format("INSERT INTO %s VALUES (?, ?, ?, ?, ?, ?, ?);", "gpkg_data_columns"))
-					.set(fe.getTableName()).set("data").set(fe.getTableName() + "-data")
-					.set("Encrypted Feature Data").set("The encrypted data of the tile using symmetric cipher")
-					.set("application/octet-stream").set((String) null).log(Level.FINE).statement();
+					.set(fe.getTableName()).set("data").set(fe.getTableName() + "-data").set("Encrypted Feature Data")
+					.set("The encrypted data of the tile using symmetric cipher").set("application/octet-stream")
+					.set((String) null).log(Level.FINE).statement();
 
 			ps.execute();
 
@@ -482,8 +509,9 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			ps.execute();
 
 			ps = prepare(c, format("INSERT INTO %s VALUES (?, ?, ?, ?, ?);", "gpkg_extensions")).set("gpkg_ext_keys")
-					.set((String) null).set("sd_encrypted_features").set("https://docs.ogc.org/per/21-064.html#GPKGExtension").set("read-write")
-					.log(Level.FINE).statement();
+					.set((String) null).set("sd_encrypted_features")
+					.set("https://docs.ogc.org/per/21-064.html#GPKGExtension").set("read-write").log(Level.FINE)
+					.statement();
 			ps.execute();
 
 			c.close();
@@ -500,8 +528,8 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		}
 	}
 
-	private void addFeatures(GeoPackage geopkg, FeatureEntry fe, SimpleFeatureCollection features, Operation operation, SecretKey dek, int dekIdx)
-			throws IOException {
+	private void addFeatures(GeoPackage geopkg, FeatureEntry fe, SimpleFeatureCollection features, Operation operation,
+			SecretKey dek, int dekIdx) throws IOException {
 		try {
 
 			Connection c = geopkg.getDataSource().getConnection();
@@ -516,7 +544,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 					// Prepare the cipher channel
 					cipher.init(Cipher.ENCRYPT_MODE, dek);
-					
+
 					ByteArrayOutputStream featureStream = new ByteArrayOutputStream();
 					CipherOutputStream cout = new CipherOutputStream(featureStream, cipher);
 
