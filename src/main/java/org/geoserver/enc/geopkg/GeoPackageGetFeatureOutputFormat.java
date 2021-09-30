@@ -253,9 +253,10 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			}
 		}
 
-		String dekId = (String) kvp.get("dek_kid");
+		String dekId = (String) kvp.get("key_id");
 		// Test for UUID - the function will throw an exception if not a valid UUID
-		UUID.fromString(dekId);
+		if (dekId != null)
+		    UUID.fromString(dekId);
 					
 		String keyChallenge = (String) kvp.get("key_challenge");
 		if ((dekId == null) && (keyChallenge == null)) {
