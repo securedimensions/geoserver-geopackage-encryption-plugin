@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.TimeZone;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -253,7 +254,9 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		}
 
 		String dekId = (String) kvp.get("dek_kid");
-
+		// Test for UUID - the function will throw an exception if not a valid UUID
+		UUID.fromString(dekId);
+					
 		String keyChallenge = (String) kvp.get("key_challenge");
 		if ((dekId == null) && (keyChallenge == null)) {
 			LOGGER.severe("'key_challenge' missing");

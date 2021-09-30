@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.SortedMap;
 import java.util.TreeMap;
+import java.util.UUID;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -365,6 +366,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 			}
 
 			String dekId = (String) kvp.get("dek_kid");
+			// Test for UUID - the function will throw an exception if not a valid UUID
+			UUID.fromString(dekId);
 
 			String keyChallenge = (String) kvp.get("key_challenge");
 			if ((dekId == null) && (keyChallenge == null)) {
