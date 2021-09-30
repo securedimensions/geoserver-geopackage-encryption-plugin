@@ -252,18 +252,19 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			}
 		}
 
+		String dekId = (String) kvp.get("dek_kid");
+
 		String keyChallenge = (String) kvp.get("key_challenge");
-		if (keyChallenge == null) {
+		if ((dekId == null) && (keyChallenge == null)) {
 			LOGGER.severe("'key_challenge' missing");
 			throw new ServiceException("Required parameter 'key_challenge' missing");
 		}
 		String keyChallengeMethod = (String) kvp.get("key_challenge_method");
-		if (keyChallengeMethod == null) {
+		if ((dekId == null) && (keyChallengeMethod == null)) {
 			LOGGER.severe("'key_challenge_method' missing");
 			throw new ServiceException("Required parameter 'key_challenge_method' missing");
 		}
 
-		String dekId = (String) kvp.get("dek_kid");
 
 		// Validate the access token
 		if (!tokenCache.isActive(accessToken)) {
