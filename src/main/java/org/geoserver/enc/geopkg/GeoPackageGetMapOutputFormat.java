@@ -37,6 +37,7 @@ import javax.crypto.Cipher;
 import javax.crypto.CipherOutputStream;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.commons.io.IOUtils;
 import org.geoserver.catalog.ResourceInfo;
@@ -400,7 +401,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 					Map<String, Object> dekJSON = JSONObjectUtils.parse(dekString);
 					SecretJWK jwk = OctetSequenceKey.parse(dekJSON);
 
-					dek = jwk.toSecretKey();
+					SecretKey key = jwk.toSecretKey();
+					dek = new SecretKeySpec(key.getEncoded(), "AES");
 					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
 					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
 							.subject((String) dekJSON.get("sub"))
