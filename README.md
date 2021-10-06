@@ -11,8 +11,8 @@ In order to request a GeoPackage output format with encrypted data, the requesti
 * `access_token` = <your access token\>
 * `key_challenge` = <a secret pin or password to modify key usage\>
 * `key_challenge_method` = plain
-* For WFS `outputFormat` = application/geopackage-sqlite3;profile=encrypted
-* For WMS `format` = application/geopackage-sqlite3;profile=encrypted
+* For WFS `outputFormat` = application/geopackage+sqlite3;profile=encrypted
+* For WMS `format` = application/geopackage+sqlite3;profile=encrypted
 
 The GeoPackage including encrypted tiles can be requested via the WMS 1.1.0 interface. One GeoPackage table is created with the rendered map from all the layer names provided with the request. All tiles with different zoom levels get packaged into this table. 
 

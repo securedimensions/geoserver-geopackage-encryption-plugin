@@ -71,8 +71,9 @@ The key is in JWK format:
 }
 ```
 
+In case you receive an access error from the KMS, this is probably caused bythe expiration time of the key. In order to adjust the expiration time, please visit the [KMS Admin Pages]https://ogc.secure-dimensions.com/kms/admin/dek available after login. Please follow the link for the key's UUID to adjust the access conditions.
+
 ## Decrypt the data
-Depending on your favorite platform, different options exist how to decrypt the data. 
+Depending on your favorite platform, different options exist how to decrypt the data. One tested option is based on the [Nimbus JOSE library](https://connect2id.com/products/nimbus-jose-jwt/examples/jwe-with-shared-key) example for direct en/decryption.
 
-One tested option is based on the [Nimbus JOSE library](https://connect2id.com/products/nimbus-jose-jwt/examples/jwe-with-shared-key) example for direct en/decryption.
-
+**_NOTE:_** The `data` BLOB starts with the Initialization Vector (IV) immediately followed by the encrypted data.
