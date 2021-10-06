@@ -66,11 +66,6 @@
       <version>${gt.version}</version>
     </dependency>
     <dependency>
-      <groupId>org.geoserver.extension</groupId>
-      <artifactId>gs-wps-core</artifactId>
-      <version>${gs.version}</version>
-    </dependency>
-    <dependency>
       <groupId>ch.hsr</groupId>
       <artifactId>geohash</artifactId>
       <version>1.4.0</version>
