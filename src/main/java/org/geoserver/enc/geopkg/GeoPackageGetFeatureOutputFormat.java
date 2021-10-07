@@ -343,7 +343,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 							.subject(tokenCache.getSub(accessToken))
 							.audience(audience)
 							.issuer(tokenCache.getClientId())
-							.expirationTime(new Date(expires))
+							.expirationTime(new Date(expires * 1000))
 							.claim("kid", kid)
 							.claim("alg", encMethod.getName())
 							.claim("kurl", dekUrl + kid)
