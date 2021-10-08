@@ -44,6 +44,7 @@ import javax.crypto.Cipher;
 import javax.crypto.CipherOutputStream;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.commons.io.IOUtils;
 import org.geoserver.catalog.Catalog;
@@ -298,7 +299,9 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 					Map<String, Object> dekJSON = JSONObjectUtils.parse(dekString);
 					SecretJWK jwk = OctetSequenceKey.parse(dekJSON);
 
-					dek = jwk.toSecretKey();
+					SecretKey key = jwk.toSecretKey();
+					dek = new SecretKeySpec(key.getEncoded(), "AES");
+					
 					// Create a JWS from the DEK to be stored in the Encrypted GeoPackage
 					JWTClaimsSet dekClaimsSet = new JWTClaimsSet.Builder()
 							.subject((String) dekJSON.get("sub"))
@@ -583,6 +586,11 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 				}
 			} catch (Exception e) {
 				c.rollback();
+				LOGGER.severe(e.getMessage());
+				ServiceException serviceException = new ServiceException("Error: " + e.getMessage());
+				serviceException.initCause(e);
+				throw serviceException;
+
 			} finally {
 				c.commit();
 				c.setAutoCommit(oldAutoCommit);
@@ -590,6 +598,9 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			}
 		} catch (Exception ex) {
 			LOGGER.severe(ex.getMessage());
+			ServiceException serviceException = new ServiceException("Error: " + ex.getMessage());
+			serviceException.initCause(ex);
+			throw serviceException;
 		}
 	}
 
