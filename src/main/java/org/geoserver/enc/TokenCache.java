@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import javax.net.ssl.HostnameVerifier;
@@ -33,7 +34,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 public class TokenCache {
 
-	static final Logger LOGGER = org.geotools.util.logging.Logging.getLogger("org.geoserver.dcs.TokenInfo");
+	static final Logger LOGGER = org.geotools.util.logging.Logging.getLogger("org.geoserver.dcs.TokenCache");
 
 	static private Long DEFAULT_EXPIRY = Long.valueOf(60 /* seconds */);
 	static private long DEFAULT_FRACTION = 100 /* th */;
@@ -125,7 +126,7 @@ public class TokenCache {
 
 		@Override
 		public V put(K key, V value) {
-			LOGGER.info("Inserting : " + key + " : " + value);
+			if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("Inserting : " + key + " : " + value);
 			V returnVal = super.put(key, value);
 			return returnVal;
 		}
@@ -161,7 +162,7 @@ public class TokenCache {
 			}
 
 			private void cleanMap() {
-				LOGGER.info("Cleaning Token Cache...");
+				if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("Cleaning Token Cache...");
 				long currentTime = Instant.now().getEpochSecond();
 				for (K key : keySet()) {
 					AccessToken token = (AccessToken) get(key);
@@ -171,10 +172,10 @@ public class TokenCache {
 					long expires = token.getCacheExpires();
 					if (currentTime > expires) {
 						V value = remove(key);
-						LOGGER.info("Removing : " + key + " : " + value);
+						if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("Removing : " + key + " : " + value);
 					}
 				}
-				LOGGER.info("Cleaning Token Cache finished.");
+				if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("Cleaning Token Cache finished.");
 			}
 		}
 	}
@@ -270,7 +271,7 @@ public class TokenCache {
 			ObjectMapper objectMapper = new ObjectMapper();
 
 			JsonNode tokenInfo = objectMapper.readTree(response);
-			LOGGER.info("TokenInfo: " + tokenInfo);
+			if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("TokenInfo: " + tokenInfo);
 			return tokenInfo;
 		} catch (Exception e) {
 			throw new ServiceException("Exception", ServiceException.NO_APPLICABLE_CODE);
@@ -299,7 +300,7 @@ public class TokenCache {
 		}
 
 		String request = requestData.toString();
-		LOGGER.fine("TokenInfo request: " + request);
+		if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("TokenInfo request: " + request);
 		// Convert the requestData into bytes
 		return request.getBytes("UTF-8");
 	}
