@@ -589,14 +589,21 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 					cout.close();
 					featureStream.flush();
 
-					WKTReader reader = new WKTReader();
-					Geometry aGeom = reader.read(((Geometry) sf.getDefaultGeometry()).toText()).copy();
-					
-					CoordinateSystem cs = sf.getType().getCoordinateReferenceSystem().getCoordinateSystem();
+					Geometry aGeom = null;
+					final CoordinateSystem cs = sf.getType().getCoordinateReferenceSystem().getCoordinateSystem();
 					if (cs.getAxis(0).getDirection() == AxisDirection.NORTH)
 					{
-						aGeom.apply(new InverseAxisCoordinateFilter());
+						// we have to construct a new Geometry via WKT Reader to be able to switch the coordinates
+						// The underlying implementation of sf.getDefaultGeometry() probably returns a copy of the
+						// coordinate value => the original cannot be changed via apply()!
+						final WKTReader reader = new WKTReader(); 
+						aGeom = reader.read(((Geometry) sf.getDefaultGeometry()).toText());
+						aGeom.apply(new InverseAxisCoordinateSequenceFilter(aGeom.getCoordinates().length));
 						aGeom.geometryChanged();
+					}
+					else
+					{
+						aGeom = (Geometry) sf.getDefaultGeometry();
 					}
 					
 					final WKBWriter wkbWriter = new WKBWriter(2);
@@ -752,22 +759,24 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		return true;
 	}
 	
-	private class InverseAxisCoordinateFilter implements CoordinateSequenceFilter
+	private class InverseAxisCoordinateSequenceFilter implements CoordinateSequenceFilter
 	{
 		
-		boolean isDone;
-
-		public InverseAxisCoordinateFilter()
-		{
-			isDone = false;
-		}
+		private boolean isDone = false;
+		private int lastIdx;
+		private double tmp;
 		
+		public InverseAxisCoordinateSequenceFilter(int size)
+		{
+			this.isDone = false;
+			this.lastIdx = size - 1;
+		}
 		@Override
 		public void filter(CoordinateSequence seq, int i) {
-			double tmp = seq.getCoordinate(i).x;
+			tmp = seq.getCoordinate(i).x;
 			seq.getCoordinate(i).x = seq.getCoordinate(i).y;
 			seq.getCoordinate(i).y = tmp;
-				isDone = true;
+			isDone = (i == lastIdx);
 		}
 
 		@Override
@@ -781,4 +790,5 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		}
 		
 	}
+	
 }
