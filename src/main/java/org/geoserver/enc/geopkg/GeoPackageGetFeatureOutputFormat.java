@@ -65,10 +65,15 @@ import org.geotools.data.simple.SimpleFeatureCollection;
 import org.geotools.data.simple.SimpleFeatureIterator;
 import org.geotools.feature.FeatureCollection;
 import org.geotools.geometry.jts.Geometries;
+import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.geopkg.FeatureEntry;
 import org.geotools.geopkg.GeoPackage;
 import org.geotools.referencing.CRS;
 import org.geotools.util.logging.Logging;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.CoordinateFilter;
+import org.locationtech.jts.geom.CoordinateSequence;
+import org.locationtech.jts.geom.CoordinateSequenceFilter;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.io.WKBWriter;
@@ -80,6 +85,8 @@ import org.opengis.feature.type.FeatureType;
 import org.opengis.feature.type.GeometryDescriptor;
 import org.opengis.feature.type.GeometryType;
 import org.opengis.referencing.crs.CoordinateReferenceSystem;
+import org.opengis.referencing.cs.AxisDirection;
+import org.opengis.referencing.cs.CoordinateSystem;
 
 import com.google.common.collect.Lists;
 import com.nimbusds.jose.EncryptionMethod;
@@ -387,10 +394,13 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			String geometryColumn = type.getName().getLocalPart();
 			String featureTypeName = meta.getName();
 
+			CoordinateReferenceSystem crs = type.getCoordinateReferenceSystem();
+			CoordinateSystem cs = crs.getCoordinateSystem();
+			String srsId = crs.getName().getCode();
 			String srs = meta.getSRS();
 			String authority = srs.split(":")[0];
 			int srid = Integer.valueOf(srs.split(":")[1]);
-
+			
 			if (meta != null) {
 				// initialize entry metadata
 				e.setIdentifier(meta.getTitle());
@@ -404,7 +414,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			}
 			schema.getUserData().put(FeatureEntry.class, e);
 
-			setMetadata(geopkg, e);
+			setMetadata(geopkg, e, crs);
 
 			addFeatures(geopkg, e, features, operation, dek, dekIdx++);
 
@@ -444,7 +454,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		return meta.getAbstract() != null ? meta.getAbstract() : meta.getDescription();
 	}
 
-	private void setMetadata(GeoPackage geopkg, FeatureEntry fe) {
+	private void setMetadata(GeoPackage geopkg, FeatureEntry fe, CoordinateReferenceSystem crs) {
 		try {
 			Connection c = geopkg.getDataSource().getConnection();
 
@@ -458,15 +468,32 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			ps.setString(1, fe.getTableName());
 			ps.setString(2, "features");
 			ps.setString(3, fe.getTableName());
-			ps.setString(4, "Encrpted Feature");
+			ps.setString(4, "Encrypted Feature");
 			ps.setString(5, nowAsISO);
-			ps.setDouble(6, fe.getBounds().getMinX());
-			ps.setDouble(7, fe.getBounds().getMinY());
-			ps.setDouble(8, fe.getBounds().getMaxX());
-			ps.setDouble(9, fe.getBounds().getMaxY());
+			if (AxisDirection.EAST == crs.getCoordinateSystem().getAxis(0).getDirection())
+			{
+				ps.setDouble(6, fe.getBounds().getMinX());
+				ps.setDouble(7, fe.getBounds().getMinY());
+				ps.setDouble(8, fe.getBounds().getMaxX());
+				ps.setDouble(9, fe.getBounds().getMaxY());
+			}
+			else
+			{
+				ps.setDouble(6, fe.getBounds().getMinY());
+				ps.setDouble(7, fe.getBounds().getMinX());
+				ps.setDouble(8, fe.getBounds().getMaxY());
+				ps.setDouble(9, fe.getBounds().getMaxX());
+			}
 			ps.setInt(10, fe.getSrid());
 			ps.execute();
 
+			// Correct the default SRS definition in the GeoPackage that was created via init()
+			ps = c.prepareStatement("UPDATE gpkg_spatial_ref_sys SET definition=?, description=? WHERE srs_id='4326'");
+			ps.setString(1, crs.getCoordinateSystem().toString());
+			ps.setString(2, "The axis order in GeoPackage using WKB is always lon/lat. This CRS definition describes the axis order for the geometry of the feature itself");
+			ps.execute();
+
+			
 			ps = c.prepareStatement("INSERT OR IGNORE INTO gpkg_geometry_columns VALUES (?, ?, ?, ?, ?, ?);");
 			ps.setString(1, fe.getTableName());
 			ps.setString(2, fe.getGeometryColumn());
@@ -562,21 +589,29 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 					cout.close();
 					featureStream.flush();
 
+					WKTReader reader = new WKTReader();
+					Geometry aGeom = reader.read(((Geometry) sf.getDefaultGeometry()).toText()).copy();
+					
+					CoordinateSystem cs = sf.getType().getCoordinateReferenceSystem().getCoordinateSystem();
+					if (cs.getAxis(0).getDirection() == AxisDirection.NORTH)
+					{
+						aGeom.apply(new InverseAxisCoordinateFilter());
+						aGeom.geometryChanged();
+					}
+					
 					final WKBWriter wkbWriter = new WKBWriter(2);
-					GeometryFactory fact = new GeometryFactory();
-					WKTReader wktRdr = new WKTReader(fact);
-					Geometry jtsGeometry = wktRdr.read(sf.getAttribute(fe.getGeometryColumn()).toString());
+					
 					ByteArrayOutputStream bao = new ByteArrayOutputStream();
-					byte flags = 0x00;
+					byte flags = 0b0;
 					if (ByteOrder.nativeOrder().equals(ByteOrder.BIG_ENDIAN))
-						flags = 0x00;
+						flags = (byte) (flags | 0b0);
 					else
-						flags = 0x01;
+						flags = (byte) (flags | 0b1);
 
 					byte[] header = { 0x47 /* G */, 0x50 /* P */, 0x00 /* version */, flags };
 					bao.write(header);
 					bao.write(sridToByteArray(fe.getSrid()));
-					bao.write(wkbWriter.write(jtsGeometry));
+					bao.write(wkbWriter.write(aGeom));
 					ps.setString(1, sf.getID());
 					ps.setBytes(2, bao.toByteArray());
 					ps.setBytes(3, featureStream.toByteArray());
@@ -630,6 +665,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		types = fType.getAttributeDescriptors();
 		// write the simple feature id
 		jsonWriter.key("id").value(simpleFeature.getID());
+		
 		// set that axis order that should be used to write geometries
 		GeometryDescriptor defaultGeomType = fType.getGeometryDescriptor();
 		if (defaultGeomType != null) {
@@ -642,6 +678,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			// If we don't know, assume EAST_NORTH so that no swapping occurs
 			jsonWriter.setAxisOrder(CRS.AxisOrder.EAST_NORTH);
 		}
+		
 		// start writing the simple feature geometry JSON object
 		Geometry aGeom = (Geometry) simpleFeature.getDefaultGeometry();
 		if (aGeom != null || writeNullGeometries()) {
@@ -656,12 +693,14 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 				jsonWriter.key("geometry_name").value(defaultGeomType.getLocalName());
 			}
 		}
+		
 		// start writing feature properties JSON object
 		jsonWriter.key("properties");
 		jsonWriter.object();
 		for (int j = 0; j < types.size(); j++) {
 			Object value = simpleFeature.getAttribute(j);
 			AttributeDescriptor ad = types.get(j);
+			
 			if (ad instanceof GeometryDescriptor) {
 				// This is an area of the spec where they
 				// decided to 'let convention evolve',
@@ -681,7 +720,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 						jsonWriter.writeGeom((Geometry) value);
 					}
 				}
-			} else if (Date.class.isAssignableFrom(ad.getType().getBinding())
+			} else  if (Date.class.isAssignableFrom(ad.getType().getBinding())
 					&& TemporalUtils.isDateTimeFormatEnabled()) {
 				// Temporal types print handling
 				jsonWriter.key(ad.getLocalName());
@@ -711,5 +750,35 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 	protected boolean writeNullGeometries() {
 		return true;
+	}
+	
+	private class InverseAxisCoordinateFilter implements CoordinateSequenceFilter
+	{
+		
+		boolean isDone;
+
+		public InverseAxisCoordinateFilter()
+		{
+			isDone = false;
+		}
+		
+		@Override
+		public void filter(CoordinateSequence seq, int i) {
+			double tmp = seq.getCoordinate(i).x;
+			seq.getCoordinate(i).x = seq.getCoordinate(i).y;
+			seq.getCoordinate(i).y = tmp;
+				isDone = true;
+		}
+
+		@Override
+		public boolean isDone() {
+			return isDone;
+		}
+
+		@Override
+		public boolean isGeometryChanged() {
+			return true;
+		}
+		
 	}
 }
