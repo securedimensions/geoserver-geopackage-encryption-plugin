@@ -28,6 +28,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.text.DateFormat;
+import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -290,7 +291,6 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 		geopkg.init();
 		setupExtension(geopkg);
-		int dekIdx = 1;
 		for (FeatureCollection collection : featureCollection.getFeatures()) {
 
 			String kid = null;
@@ -416,7 +416,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 			setMetadata(geopkg, e, crs);
 
-			addFeatures(geopkg, e, features, operation, dek, dekIdx++);
+			addFeatures(geopkg, e, features, operation, dek, kid);
 
 			if (!"false".equals(System.getProperty(PROPERTY_INDEXED))) {
 				geopkg.createSpatialIndex(e);
@@ -504,7 +504,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 			ps.execute();
 
 			ps = prepare(c, format(
-					"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, fid TEXT, %s BLOB, data BLOB, key_id INTEGER, FOREIGN KEY(key_id) REFERENCES gpkg_ext_keys(id));",
+					"CREATE TABLE IF NOT EXISTS %s (id INTEGER PRIMARY KEY, fid TEXT, %s BLOB, data BLOB, kid TEXT, FOREIGN KEY(kid) REFERENCES gpkg_ext_keys(id));",
 					fe.getTableName(), fe.getGeometryColumn())).log(Level.FINE).statement();
 			ps.execute();
 
@@ -521,14 +521,15 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 			ps.execute();
 
-			ps = c.prepareStatement(format("INSERT INTO %s (data) VALUES (?);", "gpkg_ext_keys"));
-			ps.setString(1, dekJWT.serialize());
+			ps = c.prepareStatement(format("INSERT INTO %s (id, data) VALUES (?, ?);", "gpkg_ext_keys"));
+			ps.setString(1, (String)dekJWT.getJWTClaimsSet().getClaim("kid"));
+			ps.setString(2, dekJWT.serialize());
 
 			ps.execute();
 
 			c.close();
 
-		} catch (SQLException ex) {
+		} catch (SQLException | ParseException ex) {
 			LOGGER.severe(ex.getMessage());
 			ServiceException serviceException = new ServiceException("Error: " + ex.getMessage());
 			serviceException.initCause(ex);
@@ -540,7 +541,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 		try {
 			Connection c = geopkg.getDataSource().getConnection();
 			PreparedStatement ps = prepare(c, format(
-					"CREATE TABLE %s (" + "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT," + "data TEXT NOT NULL)",
+					"CREATE TABLE %s (" + "id TEXT NOT NULL PRIMARY KEY," + "data TEXT NOT NULL)",
 					"gpkg_ext_keys")).log(Level.FINE).statement();
 			ps.execute();
 
@@ -565,13 +566,13 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 	}
 
 	private void addFeatures(GeoPackage geopkg, FeatureEntry fe, SimpleFeatureCollection features, Operation operation,
-			SecretKey dek, int dekIdx) throws IOException {
+			SecretKey dek, String dekId) throws IOException {
 		try {
 
 			Connection c = geopkg.getDataSource().getConnection();
 			final boolean oldAutoCommit = c.getAutoCommit();
 			c.setAutoCommit(false);
-			PreparedStatement ps = prepare(c, format("INSERT INTO %s (fid, %s, data, key_id) VALUES (?, ?, ?, ?)",
+			PreparedStatement ps = prepare(c, format("INSERT INTO %s (fid, %s, data, kid) VALUES (?, ?, ?, ?)",
 					fe.getTableName(), fe.getGeometryColumn())).statement();
 
 			try (SimpleFeatureIterator it = features.features()) {
@@ -622,7 +623,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 					ps.setString(1, sf.getID());
 					ps.setBytes(2, bao.toByteArray());
 					ps.setBytes(3, featureStream.toByteArray());
-					ps.setInt(4, dekIdx);
+					ps.setString(4, dekId);
 					ps.execute();
 					bao.close();
 				}
