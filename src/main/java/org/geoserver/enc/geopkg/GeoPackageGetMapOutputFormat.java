@@ -11,10 +11,13 @@ import static org.geoserver.enc.geopkg.EncryptedGeoPackage.MIME_TYPE;
 import static org.geoserver.enc.geopkg.EncryptedGeoPackage.NAME;
 import static org.geotools.jdbc.util.SqlUtil.prepare;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
@@ -24,6 +27,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -58,20 +62,24 @@ import org.geoserver.wms.WMSMapContent;
 import org.geoserver.wms.WebMap;
 import org.geoserver.wms.WebMapService;
 import org.geoserver.wms.map.PNGMapResponse;
+import org.geoserver.wms.map.RawMap;
 import org.geoserver.wms.map.RenderedImageMapResponse;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.geopkg.GeoPackage;
 import org.geotools.geopkg.Tile;
 import org.geotools.geopkg.TileEntry;
 import org.geotools.geopkg.TileMatrix;
+import org.geotools.map.Layer;
 import org.geotools.referencing.CRS;
 import org.geotools.util.logging.Logging;
+import org.geowebcache.grid.BoundingBox;
 import org.geowebcache.grid.Grid;
 import org.geowebcache.grid.GridSet;
 import org.geowebcache.grid.GridSubset;
 import org.locationtech.jts.geom.Envelope;
 import org.opengis.referencing.crs.CoordinateReferenceSystem;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.Sets;
 import com.nimbusds.jose.EncryptionMethod;
 import com.nimbusds.jose.JWSAlgorithm;
@@ -191,9 +199,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 			geopkg.init();
 		}
 
-		@Override
 		public void setMetadata(String name, ReferencedEnvelope box, String imageFormat, int srid,
-				List<MapLayerInfo> mapLayers, int[] minmax, GridSubset gridSubset)
+				List<MapLayerInfo> mapLayers, int[] minmax, GridSubset gridSubset, String kid)
 				throws IOException, ServiceException {
 
 			e.setTableName(name);
@@ -237,14 +244,16 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 				Connection c = geopkg.getDataSource().getConnection();
 
 				PreparedStatement ps = prepare(c, format("CREATE TABLE %s ("
-						+ "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT," + "data TEXT NOT NULL)", "gpkg_ext_keys"))
+						+ "id TEXT NOT NULL PRIMARY KEY," + "data TEXT NOT NULL)", "gpkg_ext_keys"))
 								.log(Level.FINE).statement();
 				ps.execute();
-
-				ps = c.prepareStatement(format("INSERT INTO %s (data) VALUES (?);", "gpkg_ext_keys"));
-				ps.setString(1, dekJWT.serialize());
+				
+				ps = c.prepareStatement(format("INSERT INTO %s (id, data) VALUES (?, ?);", "gpkg_ext_keys"));
+				ps.setString(1, kid);
+				ps.setString(2, dekJWT.serialize());
 
 				ps.execute();
+
 
 				ps = prepare(c, format("INSERT INTO %s VALUES (?, ?, ?, ?, ?);", "gpkg_extensions")).set("gpkg_ext_keys")
 						.set((String) null).set("sd_encrypted_tiles").set("https://docs.ogc.org/per/21-064.html#GPKGExtension").set("read-write")
@@ -258,8 +267,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 				ps = prepare(c,
 						format("CREATE TABLE %s (" + "id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,"
 								+ "zoom_level INTEGER NOT NULL," + "tile_column INTEGER NOT NULL,"
-								+ "tile_row INTEGER NOT NULL," + "data BLOB NOT NULL," + "key_id INTEGER,"
-								+ "FOREIGN KEY(key_id) REFERENCES gpkg_ext_keys(id))", name)).log(Level.FINE)
+								+ "tile_row INTEGER NOT NULL," + "tile_data BLOB NOT NULL," + "kid TEXT,"
+								+ "FOREIGN KEY(kid) REFERENCES gpkg_ext_keys(id))", name)).log(Level.FINE)
 										.statement();
 
 				ps.execute();
@@ -295,8 +304,7 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 			}
 		}
 
-		@Override
-		public void addTile(int zoom, int x, int y, byte[] data) throws IOException {
+		public void addTile(int zoom, int x, int y, byte[] data, String kid) throws IOException {
 			Tile t = new Tile();
 			t.setZoom(zoom);
 			t.setColumn(x);
@@ -306,8 +314,8 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 			try (Connection cx = geopkg.getDataSource().getConnection();
 					PreparedStatement ps = prepare(cx,
 							format("INSERT INTO %s (zoom_level, tile_column,"
-									+ " tile_row, data, key_id) VALUES (?,?,?,?,?)", e.getTableName()))
-											.set(t.getZoom()).set(t.getColumn()).set(t.getRow()).set(t.getData()).set(1)
+									+ " tile_row, tile_data, kid) VALUES (?,?,?,?,?)", e.getTableName()))
+											.set(t.getZoom()).set(t.getColumn()).set(t.getRow()).set(t.getData()).set(kid)
 											.log(Level.FINE).statement()) {
 				ps.execute();
 			} catch (SQLException e) {
@@ -323,6 +331,20 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 		@Override
 		public void close() {
 			geopkg.close();
+		}
+
+		@Override
+		public void addTile(int zoom, int x, int y, byte[] data) throws IOException, ServiceException {
+			// TODO Auto-generated method stub
+			;
+		}
+
+		@Override
+		public void setMetadata(String name, ReferencedEnvelope box, String imageFormat, int srid,
+				List<MapLayerInfo> mapLayers, int[] minmax, GridSubset gridSubset)
+				throws IOException, ServiceException {
+			// TODO Auto-generated method stub
+			
 		}
 	}
 
@@ -474,146 +496,189 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 		// So we store all tiles in PNG format
 		map.getRequest().setFormat("image/png");
 		
-		return super.produceMap(map);
+		map.getUserData().put("kid", kid);
+		
+		return produceMapX(map);
 	}
 
-	@Override
-	protected TilesFile createTilesFile() throws IOException {
-		return new GeopackageWrapper();
-	}
+    private WebMap produceMapX(WMSMapContent map) throws ServiceException, IOException {
+    	GeopackageWrapper tiles = new GeopackageWrapper();
+        addTiles(tiles, map);
+        tiles.close();
+
+        final File dbFile = tiles.getFile();
+        final BufferedInputStream bin = new BufferedInputStream(new FileInputStream(dbFile));
+
+        RawMap result =
+                new RawMap(map, bin, getMimeType()) {
+                    @Override
+                    public void writeTo(OutputStream out) throws IOException {
+                        String dbFilename = getAttachmentFileName();
+                        if (dbFilename != null) {
+                            dbFilename =
+                                    dbFilename.substring(0, dbFilename.length() - 4) + extension;
+                        } else {
+                            // this shouldn't really ever happen, but fallback anyways
+                            dbFilename = "tiles" + extension;
+                        }
+
+                        IOUtils.copy(bin, out);
+                        out.flush();
+                        bin.close();
+                        try {
+                            dbFile.delete();
+                        } catch (Exception e) {
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "Error deleting file: " + dbFile.getAbsolutePath(),
+                                    e);
+                        }
+                    }
+                };
+
+        result.setContentDispositionHeader(map, extension, true);
+        return result;
+    }
 
 	/** Add tiles to an existing GeoPackage */
 	public void addTiles(GeoPackage geopkg, TileEntry e, GetMapRequest req, String name) throws IOException {
 		addTiles(new GeopackageWrapper(geopkg, e), req, name);
 	}
+	
+    protected void addTiles(GeopackageWrapper tiles, WMSMapContent map)
+            throws ServiceException, IOException {
+        GetMapRequest req = map.getRequest();
 
-	/**
-	 * Special method to add tiles using Geopackage's own grid matrix system rather
-	 * than GWC gridsubsets
-	 */
-	public void addTiles(GeoPackage geopkg, TileEntry e, GetMapRequest request, List<TileMatrix> matrices, String name)
-			throws IOException, ServiceException {
+        List<Layer> layers = map.layers();
+        List<MapLayerInfo> mapLayers = req.getLayers();
 
-		List<MapLayerInfo> mapLayers = request.getLayers();
+        Preconditions.checkState(
+                layers.size() == mapLayers.size(),
+                "Number of map layers not same as number of rendered layers");
 
-		SortedMap<Integer, TileMatrix> matrixSet = new TreeMap<Integer, TileMatrix>();
-		for (TileMatrix matrix : matrices) {
-			matrixSet.put(matrix.getZoomLevel(), matrix);
-		}
+        addTiles(tiles, req, map.getTitle(), (String)map.getUserData().get("kid"));
+    }
 
-		if (mapLayers.isEmpty()) {
-			return;
-		}
+    protected void addTiles(GeopackageWrapper tiles, GetMapRequest req, String name, String kid)
+            throws ServiceException, IOException {
+        List<MapLayerInfo> mapLayers = req.getLayers();
 
-		// Get the RasterCleaner object
-		RasterCleaner cleaner = GeoServerExtensions.bean(RasterCleaner.class);
+        // list of layers to render directly and include as tiles
+        List<MapLayerInfo> tileLayers = new ArrayList<MapLayerInfo>();
 
-		// figure out the actual bounds of the tiles to be renderered
-		ReferencedEnvelope bbox = bounds(request);
+        // tiled mode means render all as map tile layer
+        tileLayers.addAll(mapLayers);
 
-		// set metadata
-		e.setTableName(name);
-		e.setBounds(bbox);
-		e.setSrid(srid(request));
-		e.getTileMatricies().addAll(matrices);
-		if (LOGGER.getLevel() == Level.FINE) LOGGER.fine("Creating tile entry" + e.getTableName());
-		geopkg.create(e);
+        addTiles(tiles, tileLayers, req, name, kid);
+    }
 
-		GetMapRequest req = new GetMapRequest();
-		OwsUtils.copy(request, req, GetMapRequest.class);
-		req.setLayers(mapLayers);
+    /** Add the tiles */
+    protected void addTiles(
+    		GeopackageWrapper tiles, List<MapLayerInfo> mapLayers, GetMapRequest request, String name, String kid)
+            throws IOException, ServiceException {
 
-		Map formatOpts = req.getFormatOptions();
+        if (mapLayers.isEmpty()) {
+            return;
+        }
 
-		Integer minZoom = null;
-		if (formatOpts.containsKey("min_zoom")) {
-			minZoom = Integer.parseInt(formatOpts.get("min_zoom").toString());
-		}
+        // Get the RasterCleaner object
+        RasterCleaner cleaner = GeoServerExtensions.bean(RasterCleaner.class);
 
-		Integer maxZoom = null;
-		if (formatOpts.containsKey("max_zoom")) {
-			maxZoom = Integer.parseInt(formatOpts.get("max_zoom").toString());
-		} else if (formatOpts.containsKey("num_zooms")) {
-			maxZoom = minZoom + Integer.parseInt(formatOpts.get("num_zooms").toString());
-		}
+        // figure out a name for the file entry
+        String tileEntryName = null;
+        Map formatOpts = request.getFormatOptions();
+        if (formatOpts.containsKey("tileset_name")) {
+            tileEntryName = (String) formatOpts.get("tileset_name");
+        }
+        if (name != null) {
+            tileEntryName = name;
+        }
+        if (tileEntryName == null) {
+            Iterator<MapLayerInfo> it = mapLayers.iterator();
+            tileEntryName = "";
+            while (it.hasNext()) {
+                tileEntryName += it.next().getLayerInfo().getName() + "_";
+            }
+            tileEntryName = tileEntryName.substring(0, tileEntryName.length() - 1);
+        }
 
-		if (minZoom != null || maxZoom != null) {
-			matrixSet = matrixSet.subMap(minZoom, maxZoom);
-		}
+        // figure out the actual bounds of the tiles to be renderered
+        BoundingBox bbox = bbox(request);
+        GridSubset gridSubset = findBestGridSubset(request);
+        int[] minmax = findMinMaxZoom(gridSubset, request);
+        // ReferencedEnvelope bounds = new ReferencedEnvelope(findTileBounds(gridSubset, bbox,
+        //        minmax[0]), getCoordinateReferenceSystem(map));
 
-		String imageFormat = formatOpts.containsKey("format") ? parseFormatFromOpts(formatOpts)
-				: findBestFormat(request);
-		req.setFormat(imageFormat);
+        // create a prototype getmap request
+        GetMapRequest req = new GetMapRequest();
+        OwsUtils.copy(request, req, GetMapRequest.class);
+        req.setLayers(mapLayers);
 
-		CoordinateReferenceSystem crs = getCoordinateReferenceSystem(request);
-		if (crs == null) {
-			String srs = getSRS(request);
-			try {
-				crs = CRS.decode(srs);
-			} catch (Exception ex) {
-				throw new ServiceException(ex);
-			}
-		}
-		double xSpan = crs.getCoordinateSystem().getAxis(0).getMaximumValue()
-				- crs.getCoordinateSystem().getAxis(0).getMinimumValue();
-		double ySpan = crs.getCoordinateSystem().getAxis(1).getMaximumValue()
-				- crs.getCoordinateSystem().getAxis(1).getMinimumValue();
-		double xOffset = crs.getCoordinateSystem().getAxis(0).getMinimumValue();
-		double yOffset = crs.getCoordinateSystem().getAxis(1).getMinimumValue();
+        String imageFormat =
+                formatOpts.containsKey("format")
+                        ? parseFormatFromOpts(formatOpts)
+                        : findBestFormat(request);
 
-		req.setCrs(crs);
+        req.setFormat(imageFormat);
+        req.setWidth(gridSubset.getTileWidth());
+        req.setHeight(gridSubset.getTileHeight());
+        req.setCrs(getCoordinateReferenceSystem(request));
 
-		// column and row bounds
-		Integer minColumn = null, maxColumn = null, minRow = null, maxRow = null;
-		if (formatOpts.containsKey("min_column")) {
-			minColumn = Integer.parseInt(formatOpts.get("min_column").toString());
-		}
-		if (formatOpts.containsKey("max_column")) {
-			maxColumn = Integer.parseInt(formatOpts.get("max_column").toString());
-		}
-		if (formatOpts.containsKey("min_row")) {
-			minRow = Integer.parseInt(formatOpts.get("min_row").toString());
-		}
-		if (formatOpts.containsKey("max_row")) {
-			maxRow = Integer.parseInt(formatOpts.get("max_row").toString());
-		}
+        // store metadata
+        tiles.setMetadata(
+                tileEntryName,
+                bounds(request),
+                imageFormat,
+                srid(request),
+                mapLayers,
+                minmax,
+                gridSubset,
+                kid);
 
-		for (TileMatrix matrix : matrixSet.values()) {
+        // column and row bounds
+        Integer minColumn = null, maxColumn = null, minRow = null, maxRow = null;
+        if (formatOpts.containsKey("min_column")) {
+            minColumn = Integer.parseInt(formatOpts.get("min_column").toString());
+        }
+        if (formatOpts.containsKey("max_column")) {
+            maxColumn = Integer.parseInt(formatOpts.get("max_column").toString());
+        }
+        if (formatOpts.containsKey("min_row")) {
+            minRow = Integer.parseInt(formatOpts.get("min_row").toString());
+        }
+        if (formatOpts.containsKey("max_row")) {
+            maxRow = Integer.parseInt(formatOpts.get("max_row").toString());
+        }
 
-			req.setWidth(matrix.getTileWidth());
-			req.setHeight(matrix.getTileHeight());
+        // flag determining if tile row indexes we store in database should be inverted
+        boolean flipy = Boolean.valueOf((String) formatOpts.get("flipy"));
+        for (int z = minmax[0]; z < minmax[1]; z++) {
+            long[] intersect = gridSubset.getCoverageIntersection(z, bbox);
+            long minX = minColumn == null ? intersect[0] : Math.max(minColumn, intersect[0]);
+            long maxX = maxColumn == null ? intersect[2] : Math.min(maxColumn, intersect[2]);
+            long minY = minRow == null ? intersect[1] : Math.max(minRow, intersect[1]);
+            long maxY = maxRow == null ? intersect[3] : Math.min(maxRow, intersect[3]);
+            for (long x = minX; x <= maxX; x++) {
+                for (long y = minY; y <= maxY; y++) {
+                    BoundingBox box = gridSubset.boundsFromIndex(new long[] {x, y, z});
+                    req.setBbox(
+                            new Envelope(
+                                    box.getMinX(), box.getMaxX(), box.getMinY(), box.getMaxY()));
+                    WebMap result = webMapService.getMap(req);
 
-			// long[] intersect = gridSubset.getCoverageIntersection(z, bbox);
-			double resX = xSpan / matrix.getMatrixWidth();
-			double resY = ySpan / matrix.getMatrixHeight();
+                    tiles.addTile(
+                            z,
+                            (int) x,
+                            (int) (flipy ? gridSubset.getNumTilesHigh(z) - (y + 1) : y),
+                            toBytes(result),
+                            kid);
+                    // Cleanup
+                    cleaner.finished(null);
+                }
+            }
+        }
+    }
 
-			long minX = Math.round(Math.floor((bbox.getMinX() - xOffset) / resX));
-			long minY = Math.round(Math.floor((bbox.getMinY() - yOffset) / resY));
-			long maxX = Math.round(Math.ceil((bbox.getMaxX() - xOffset) / resX));
-			long maxY = Math.round(Math.ceil((bbox.getMaxY() - yOffset) / resY));
-
-			minX = minColumn == null ? minX : Math.max(minColumn, minX);
-			maxX = maxColumn == null ? maxX : Math.min(maxColumn, maxX);
-			minY = minRow == null ? minY : Math.max(minRow, minY);
-			maxY = maxRow == null ? maxY : Math.min(maxRow, maxY);
-
-			for (long x = minX; x < maxX; x++) {
-				for (long y = minY; y < maxY; y++) {
-					req.setBbox(new Envelope(xOffset + x * resX, xOffset + (x + 1) * resX, yOffset + y * resY,
-							yOffset + (y + 1) * resY));
-					WebMap result = webMapService.getMap(req);
-					Tile t = new Tile();
-					t.setZoom(matrix.getZoomLevel());
-					t.setColumn((int) x);
-					t.setRow((int) y);
-					t.setData(toBytes(result));
-					addTile(geopkg, e, t);
-					// Cleanup
-					cleaner.finished(null);
-				}
-			}
-		}
-	}
 
 	@Override
 	protected byte[] toBytes(WebMap map) throws IOException {
@@ -640,17 +705,9 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
 
 	}
 
-	private void addTile(GeoPackage geopkg, TileEntry entry, Tile tile) throws IOException {
-		try (Connection cx = geopkg.getDataSource().getConnection();
-				PreparedStatement ps = prepare(cx,
-						format("INSERT INTO %s (zoom_level, tile_column,"
-								+ " tile_row, data, key_id) VALUES (?,?,?,?,?)", entry.getTableName()))
-										.set(tile.getZoom()).set(tile.getColumn()).set(tile.getRow())
-										.set(tile.getData()).set(1).log(Level.FINE).statement()) {
-			ps.execute();
-		} catch (SQLException e) {
-			LOGGER.severe(e.getMessage());
-			throw new IOException(e);
-		}
+	@Override
+	protected TilesFile createTilesFile() throws IOException {
+		// TODO Auto-generated method stub
+		return null;
 	}
 }
