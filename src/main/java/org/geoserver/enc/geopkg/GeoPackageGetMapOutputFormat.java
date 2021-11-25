@@ -540,11 +540,6 @@ public class GeoPackageGetMapOutputFormat extends AbstractTilesGetMapOutputForma
         return result;
     }
 
-	/** Add tiles to an existing GeoPackage */
-	public void addTiles(GeoPackage geopkg, TileEntry e, GetMapRequest req, String name) throws IOException {
-		addTiles(new GeopackageWrapper(geopkg, e), req, name);
-	}
-	
     protected void addTiles(GeopackageWrapper tiles, WMSMapContent map)
             throws ServiceException, IOException {
         GetMapRequest req = map.getRequest();
