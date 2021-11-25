@@ -521,7 +521,7 @@ public class GeoPackageGetFeatureOutputFormat extends WFSGetFeatureOutputFormat 
 
 			ps.execute();
 
-			ps = c.prepareStatement(format("INSERT INTO %s (id, data) VALUES (?, ?);", "gpkg_ext_keys"));
+			ps = c.prepareStatement(format("INSERT OR IGNORE INTO %s (id, data) VALUES (?, ?);", "gpkg_ext_keys"));
 			ps.setString(1, (String)dekJWT.getJWTClaimsSet().getClaim("kid"));
 			ps.setString(2, dekJWT.serialize());
 
