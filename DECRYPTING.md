@@ -1,7 +1,7 @@
-# Decrypting the Encrypted GeoPackage Format
-The encrypted data for Features or Tiles is stored as a SQLite BLOB. Each BLOB starts with the Initialization Vecotr (16 Bytes) directly followed by the actually encrypted data.
+# Decrypting the Secure GeoPackage Format
+The encrypted data for Features or Tiles is stored as a SQLite BLOB. Each BLOB starts with the Initialization Vecotr (i.e. 16 Bytes) directly followed by the actually encrypted data.
 
-In order to decrypt the data, you first need to fetch the (decryption) key from the [Key Management System](htts://ogc.secure-dimensions.com/kms). With the obtained key, the actual data can be decrypted.
+In order to decrypt the data, the (decryption) key needs to be fetched from the [Key Management System](htts://ogc.secure-dimensions.com/kms). With the obtained key, the data can be decrypted.
 
 In the following, you'll see a manual step-by-step walk through leveraging Linux command line tools:
 
@@ -10,9 +10,6 @@ In the following, you'll see a manual step-by-step walk through leveraging Linux
 * base64 
 * sed 
 * jq
-
-Please make sure you have installed these tools.
-
 
 ## Extract the encrypted data and key metadata
 Open the geopackage file with sqlite3:
